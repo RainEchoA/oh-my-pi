@@ -100,12 +100,12 @@ export type CustomToolSessionEvent =
 	  }
 	| {
 			reason: "auto_compaction_start";
-			trigger: "threshold" | "overflow" | "idle";
-			action: "context-full" | "handoff";
+			trigger: "threshold" | "overflow" | "idle" | "incomplete";
+			action: "context-full" | "handoff" | "shake";
 	  }
 	| {
 			reason: "auto_compaction_end";
-			action: "context-full" | "handoff";
+			action: "context-full" | "handoff" | "shake";
 			result: CompactionResult | undefined;
 			aborted: boolean;
 			willRetry: boolean;

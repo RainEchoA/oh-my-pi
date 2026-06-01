@@ -145,13 +145,33 @@ describe("tool path arrays", () => {
 		const text = getText(result);
 		const details = result.details as { fileCount?: number; scopePath?: string } | undefined;
 
-		expect(text).toMatch(/^# apps\/\n## grep\.txt#[0-9A-F]{3}/m);
-		expect(text).toMatch(/^# packages\/\n## grep\.txt#[0-9A-F]{3}/m);
-		expect(text).toMatch(/^# phases\/\n## grep\.txt#[0-9A-F]{3}/m);
+		expect(text).toMatch(/^# apps\/\n## grep\.txt#[0-9A-F]{4}/m);
+		expect(text).toMatch(/^# packages\/\n## grep\.txt#[0-9A-F]{4}/m);
+		expect(text).toMatch(/^# phases\/\n## grep\.txt#[0-9A-F]{4}/m);
 		expect(text).toContain("shared-needle");
 		expect(text).not.toContain("# other");
 		expect(details?.fileCount).toBe(3);
 		expect(details?.scopePath).toBe("apps/, packages/, phases/");
+	});
+
+	it("records hashline snapshots for matched files", async () => {
+		const session = createTestSession(tempDir);
+		const tools = await createTools(session);
+		const tool = tools.find(entry => entry.name === "search");
+		expect(tool).toBeDefined();
+		if (!tool) throw new Error("Missing search tool");
+
+		const result = await tool.execute("search-records-snapshot", {
+			pattern: "shared-needle",
+			paths: ["apps/"],
+		});
+		const text = getText(result);
+		const tag = /^# apps\/\n## grep\.txt#([0-9A-F]{4})/m.exec(text)?.[1];
+		expect(tag).toBeDefined();
+		if (!tag) throw new Error("Missing search snapshot tag");
+
+		const snapshot = session.fileSnapshotStore?.byHash(path.join(tempDir, "apps", "grep.txt"), tag);
+		expect(snapshot?.text).toBe("shared-needle apps\n");
 	});
 
 	it("search accepts a single string path through tool validation", async () => {
@@ -359,7 +379,7 @@ describe("tool path arrays", () => {
 		const text = getText(result);
 		const details = result.details as { fileCount?: number; scopePath?: string } | undefined;
 
-		expect(text).toMatch(/^# apps\/\n## grep\.txt#[0-9A-F]{3}/m);
+		expect(text).toMatch(/^# apps\/\n## grep\.txt#[0-9A-F]{4}/m);
 		expect(text).toContain("shared-needle");
 		expect(text).not.toContain(tempDir);
 		expect(details?.fileCount).toBe(1);
@@ -416,9 +436,9 @@ describe("tool path arrays", () => {
 		const text = getText(result);
 		const details = result.details as { fileCount?: number; scopePath?: string } | undefined;
 
-		expect(text).toMatch(/^# apps\/\n## ast\.ts#[0-9A-F]{3}/m);
-		expect(text).toMatch(/^# packages\/\n## ast\.ts#[0-9A-F]{3}/m);
-		expect(text).toMatch(/^# phases\/\n## ast\.ts#[0-9A-F]{3}/m);
+		expect(text).toMatch(/^# apps\/\n## ast\.ts#[0-9A-F]{4}/m);
+		expect(text).toMatch(/^# packages\/\n## ast\.ts#[0-9A-F]{4}/m);
+		expect(text).toMatch(/^# phases\/\n## ast\.ts#[0-9A-F]{4}/m);
 		expect(text).not.toContain("# other");
 		expect(details?.fileCount).toBe(3);
 		expect(details?.scopePath).toBe("apps/**/*.ts, packages/**/*.ts, phases/**/*.ts");
@@ -444,9 +464,9 @@ describe("tool path arrays", () => {
 		const text = getText(preview);
 		const details = preview.details as { totalReplacements?: number; scopePath?: string } | undefined;
 
-		expect(text).toMatch(/^# apps\/\n## ast\.ts#[0-9A-F]{3} \(\d+ replacement/m);
-		expect(text).toMatch(/^# packages\/\n## ast\.ts#[0-9A-F]{3} \(\d+ replacement/m);
-		expect(text).toMatch(/^# phases\/\n## ast\.ts#[0-9A-F]{3} \(\d+ replacement/m);
+		expect(text).toMatch(/^# apps\/\n## ast\.ts#[0-9A-F]{4} \(\d+ replacement/m);
+		expect(text).toMatch(/^# packages\/\n## ast\.ts#[0-9A-F]{4} \(\d+ replacement/m);
+		expect(text).toMatch(/^# phases\/\n## ast\.ts#[0-9A-F]{4} \(\d+ replacement/m);
 		expect(text).not.toContain("# other");
 		expect(details?.totalReplacements).toBe(3);
 		expect(details?.scopePath).toBe("apps/**/*.ts, packages/**/*.ts, phases/**/*.ts");
@@ -556,9 +576,9 @@ describe("tool path arrays", () => {
 		const text = getText(result);
 		const details = result.details as { fileCount?: number; scopePath?: string } | undefined;
 
-		expect(text).toMatch(/^# apps\/\n## grep\.txt#[0-9A-F]{3}/m);
-		expect(text).toMatch(/^# packages\/\n## grep\.txt#[0-9A-F]{3}/m);
-		expect(text).toMatch(/^# phases\/\n## grep\.txt#[0-9A-F]{3}/m);
+		expect(text).toMatch(/^# apps\/\n## grep\.txt#[0-9A-F]{4}/m);
+		expect(text).toMatch(/^# packages\/\n## grep\.txt#[0-9A-F]{4}/m);
+		expect(text).toMatch(/^# phases\/\n## grep\.txt#[0-9A-F]{4}/m);
 		expect(text).not.toContain("# other");
 		expect(details?.fileCount).toBe(3);
 		expect(details?.scopePath).toBe("apps, packages, phases");
@@ -583,8 +603,8 @@ describe("tool path arrays", () => {
 		const text = getText(result);
 		const details = result.details as { fileCount?: number; scopePath?: string } | undefined;
 
-		expect(text).toMatch(/^# alpha\.txt#[0-9A-F]{3}/m);
-		expect(text).toMatch(/^# beta\.txt#[0-9A-F]{3}/m);
+		expect(text).toMatch(/^# alpha\.txt#[0-9A-F]{4}/m);
+		expect(text).toMatch(/^# beta\.txt#[0-9A-F]{4}/m);
 		expect(text).toContain("exact-needle alpha");
 		expect(text).toContain("exact-needle beta");
 		expect(text).not.toContain("nested");

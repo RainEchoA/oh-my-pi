@@ -2,9 +2,71 @@
 
 ## [Unreleased]
 
+## [15.7.4] - 2026-05-31
+
+### Fixed
+
+- Fixed Anthropic stream idle-timeout retries after the provider stream has already begun.
+- Fixed Xiaomi MiMo `/login` rejecting token-plan (`tp-`) keys with `401 Invalid API Key`. The validation request was still sending the legacy Anthropic `x-api-key` header against the OpenAI-compatible `/v1/chat/completions` endpoint; switched to `Authorization: Bearer`, matching the runtime path. ([#1580](https://github.com/can1357/oh-my-pi/issues/1580))
+- Fixed OpenAI-compatible tool-call replay to send empty assistant content instead of `null`, avoiding strict custom backends that crash with `str`/`NoneType` concatenation after subagent tool results. ([#1585](https://github.com/can1357/oh-my-pi/issues/1585))
+
+## [15.7.3] - 2026-05-31
+
+### Changed
+
+- Throttled per-delta streaming JSON re-parsing of OpenAI Responses/Codex tool-call arguments (bounding mid-stream parse cost from O(N²) to O(N)). Finalization via `response.output_item.done` now writes the authoritative full arguments back to the persisted assistant-message block, so tool calls finalized without a trailing `response.function_call_arguments.done` no longer retain stale/empty (`{}`) arguments. ([#1507](https://github.com/can1357/oh-my-pi/pull/1507))
+
+## [15.6.0] - 2026-05-30
+
+### Fixed
+
+- Fixed Anthropic adaptive-thinking replay preserving signed thinking blocks on the latest abandoned tool-use assistant message, avoiding `thinking blocks in the latest assistant message cannot be modified` 400s. ([#1531](https://github.com/can1357/oh-my-pi/issues/1531))
+
+## [15.5.15] - 2026-05-30
+
+### Added
+
+- Added `PI_REQ_DEBUG=1` request/response recording for provider transports. Each request writes `rr-session-N.json`; each received response writes `rr-session-N.res.log` with response headers followed by raw body bytes.
+
+### Fixed
+
+- Fixed OpenCode-Go dynamic model refresh downgrading `qwen3.7-max` from Anthropic Messages to OpenAI-compatible transport, which caused `401 Model qwen3.7-max is not supported for format oa-compat` after `/v1/models` cache refreshes.
+
+## [15.5.12] - 2026-05-29
+### Removed
+
+- Removed ANTML stream markup healing for `antml:function_calls` and `antml:thinking` envelopes, so Anthropic-compatible providers no longer parse those tags into `toolCall`/`thinking` events
+
+### Fixed
+
+- Fixed GLM-5.x coding-plan OpenAI-compatible streams to use a longer default watchdog window, avoiding spurious `OpenAI completions stream stalled while waiting for the next event` errors during slow `glm-5.1` thinking/output phases. ([#1494](https://github.com/can1357/oh-my-pi/issues/1494))
+- Fixed `zhipu-coding-plan` model discovery and credential validation to use the dedicated GLM Coding Plan endpoint (`https://open.bigmodel.cn/api/coding/paas/v4`) instead of the general BigModel endpoint, preventing requests from consuming ordinary account balance. ([#1494](https://github.com/can1357/oh-my-pi/issues/1494))
+- Fixed DeepSeek tool calls failing on NanoGPT (e.g. `nanogpt/deepseek/deepseek-v4-pro` with reasoning enabled) by routing tool-bearing DeepSeek requests through NanoGPT's `:tools` model route and adding `nanogpt` to the DSML leak allowlist so streamed `<｜DSML｜tool_calls>...</｜DSML｜tool_calls>` envelopes are healed into structured tool calls instead of being passed through as visible text. ([#1488](https://github.com/can1357/oh-my-pi/issues/1488))
+- Fixed DeepSeek tool calls failing on NanoGPT (e.g. `nanogpt/deepseek/deepseek-v4-pro` with reasoning enabled) by adding `nanogpt` to the DSML leak allowlist so streamed `<｜DSML｜tool_calls>...</｜DSML｜tool_calls>` envelopes are healed into structured tool calls instead of being passed through as visible text. The `:tools` model suffix is no longer appended on NanoGPT; that route triggered NanoGPT's server-side tool-call parser and 502'd with `code: "malformed_tool_call"` on complex tool schemas (`todo_write`) — the default route forwards `delta.content` (including DSML envelopes) which is healed client-side. ([#1488](https://github.com/can1357/oh-my-pi/issues/1488))
+- Fixed OpenAI-compatible streamed parallel tool calls losing indexed argument deltas by tracking active tool-call blocks by the provider's `tool_calls[].index`; this keeps parallel NanoGPT `read` calls from merging or dropping their `path` arguments. ([#1488](https://github.com/can1357/oh-my-pi/issues/1488))
+
+## [15.5.11] - 2026-05-29
+
+### Added
+
+- Added mid-conversation `system` message support for Anthropic Messages by upgrading eligible `developer` turns to `role: "system"` on first-party Claude API with Claude Opus 4.8+ and newer
+- Added `supportsMidConversationSystem` to Anthropic compatibility settings so consumers can opt in to or disable mid-conversation `system` role handling per model
+- Added `anthropic.claude-opus-4-8` model metadata in the model registry for Bedrock Converse streaming with effort-based thinking support through `xhigh`
+
+### Changed
+
+- Changed Anthropic adaptive-thinking effort mapping for Opus 4.7+ on the Messages API to use the model's full five-tier scale: user-facing efforts now shift up one notch (`minimal→low`, `low→medium`, `medium→high`, `high→xhigh`, `xhigh→max`) so the top tier reaches the genuine `max` level and `high` lands on Anthropic's recommended `xhigh` coding/agentic default. Older adaptive models (Opus 4.6) and Bedrock Converse keep the four-tier legacy mapping where `xhigh` aliases to `max`.
+
+### Fixed
+
+- Fixed OpenCode Zen `400 thinking is enabled but reasoning_content is missing in assistant tool call message` for every model behind `opencode-go`/`opencode-zen` (Kimi K2.x, DeepSeek V4 Pro/Flash, GLM-5.x, Qwen3.x, MiMo, MiniMax) by reactivating `requiresReasoningContentForToolCalls` and pinning the wire field to `reasoning_content` for any opencode request in thinking mode. The static compat default still omits the field for thinking-disabled turns to preserve the `Extra inputs are not permitted` guard from #1071; forced-tool turns also stay off because the existing `disableReasoningOnForcedToolChoice` guard strips thinking from the wire body. ([#1484](https://github.com/can1357/oh-my-pi/issues/1484))
+
+## [15.5.8] - 2026-05-28
+
 ### Added
 
 - Added `CheckCredentialsOptions.completionProbe` (and `completionTimeoutMs`) so `AuthStorage.checkCredentials` can additionally exercise each credential against the provider's chat-completion endpoint after refresh-on-expiry. Result lands on `CredentialHealthResult.completion` ({ok, reason?, modelId?, latencyMs?}) without disturbing the usage `ok` field. Public types: `CompletionProbe`, `CompletionProbeInput`, `CompletionProbeCredential`, `CredentialCompletionResult`. The probe is invoked even when no `UsageProvider` is registered for the row, and is skipped when OAuth refresh fails (the stale bytes would only mask the upstream failure).
+- Added Wafer Pass and Wafer Serverless providers (`wafer-pass`, `wafer-serverless`). OpenAI-compatible (`https://pass.wafer.ai/v1`), bearer auth, `wfr_…` keys. `/login wafer-pass` and `/login wafer-serverless` paste-and-validate the key against `/v1/models`. `WAFER_PASS_API_KEY` and `WAFER_SERVERLESS_API_KEY` environment variables wired into `getEnvApiKey`. Bundled catalog seeds `wafer-pass/{GLM-5.1, Qwen3.5-397B-A17B}` and `wafer-serverless/{GLM-5.1, Kimi-K2.6, Qwen3.5-397B-A17B, Qwen3.6-35B-A3B, qwen3.7-max, deepseek-v4-flash, deepseek-v4-pro}`; dynamic discovery via `/v1/models` overlays additional models at runtime. Pass-tier discovery filters `wafer.tier === "pass_included"`. Pass-SKU costs are seeded at `0` (flat-rate subscription, no per-token charge — matches `kimi-code`/`firepass`/`alibaba-coding-plan`). Serverless costs are the wafer.ai retail rate, derived from the `*_cents_per_million` envelope via `value × 125 / 10000` (e.g. GLM-5.1 `120` → $1.50/M, Kimi-K2.6 `88` → $1.10/M). Reasoning entries get a thinking compat picked from the `wafer.provider` envelope: `zai`/`moonshotai` → zai-style `thinking: { type }`, `qwen` → top-level `enable_thinking`, `deepseek` and unknown upstreams stay unset so `detectOpenAICompat` can pick `reasoning_effort` from the id pattern at request time.
 
 ### Changed
 
@@ -81,6 +143,15 @@
 ### Fixed
 
 - Fixed Synthetic model discovery to treat the provider `/models` response as authoritative so deprecated bundled IDs are pruned from the runtime cache, and changed Synthetic login validation to avoid probing a specific model ([#1417](https://github.com/can1357/oh-my-pi/issues/1417)).
+
+### Added
+
+- Added `parseStreamingJsonThrottled` to `@oh-my-pi/pi-ai/utils/json-parse` — a per-delta wrapper around `parseStreamingJson` that skips re-parses until the buffer has grown by `minGrowthBytes` (default 256). Wired into the streaming hot path of every provider's tool-call argument accumulator (`anthropic`, `amazon-bedrock`, `openai-completions`, `openai-codex-responses`, `openai-responses-shared`) so per-delta cost is O(N) in total buffer length instead of O(N²). Each provider's `toolcall_end` still runs a final unthrottled parse, so the published `block.arguments` is unchanged.
+- Added named-tool routing support to Google providers: `GoogleSharedStreamOptions.toolChoice` and `GoogleGeminiCliOptions.toolChoice` now accept `{ mode: "ANY"; allowedFunctionNames: [string, ...string[]] }` in addition to the string forms. `mapGoogleToolChoice` converts `ToolChoice` objects of shape `{ type: "tool" | "function", name }` to the wire form. Mirrors the equivalent Anthropic mapper.
+
+### Changed
+
+- Changed `mapGoogleToolChoice` to be exported from `@oh-my-pi/pi-ai/stream` so callers can build the wire-shape allow-list directly without re-deriving it.
 
 ## [15.5.0] - 2026-05-26
 ### Added

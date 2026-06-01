@@ -221,6 +221,39 @@ describe("ModelRegistry", () => {
 			expect(variants.some(variant => variant.selector === "openrouter/z-ai/glm-4.7-20251222:nitro")).toBe(true);
 		});
 
+		test("keeps Perplexity search canonical distinct from non-search Sonar Pro ids", () => {
+			writeRawModelsJson({
+				demo: providerConfig("https://demo.example.com/v1", [
+					{ id: "perplexity/sonar-pro-search" },
+					{ id: "perplexity/sonar-pro" },
+					{ id: "sonar-pro" },
+				]),
+			});
+
+			const registry = new ModelRegistry(authStorage, modelsJsonPath);
+			const searchModel = registry.find("demo", "perplexity/sonar-pro-search");
+			const proModel = registry.find("demo", "perplexity/sonar-pro");
+			const bareModel = registry.find("demo", "sonar-pro");
+			if (!searchModel || !proModel || !bareModel) {
+				throw new Error("Perplexity canonical equivalence fixture models were not registered");
+			}
+
+			const searchCanonicalId = registry.getCanonicalId(searchModel);
+			expect(searchCanonicalId).toBe("perplexity/sonar-pro-search");
+			expect(searchCanonicalId).not.toBe(registry.getCanonicalId(proModel));
+			expect(searchCanonicalId).not.toBe(registry.getCanonicalId(bareModel));
+			expect(
+				registry
+					.getCanonicalVariants("perplexity/sonar-pro-search")
+					.some(variant => variant.selector === "demo/perplexity/sonar-pro"),
+			).toBe(false);
+			expect(
+				registry
+					.getCanonicalVariants("perplexity/sonar-pro-search")
+					.some(variant => variant.selector === "demo/sonar-pro"),
+			).toBe(false);
+		});
+
 		test("uses bundled metadata for Ollama cloud aliases in custom local-proxy configs", () => {
 			writeRawModelsJson({
 				ollama: {
@@ -258,7 +291,7 @@ describe("ModelRegistry", () => {
 			});
 
 			const registry = new ModelRegistry(authStorage, modelsJsonPath);
-			const opusVariants = registry.getCanonicalVariants("claude-opus-4-7");
+			const opusVariants = registry.getCanonicalVariants("claude-opus-4-8");
 			const haikuVariants = registry.getCanonicalVariants("claude-haiku-4-5");
 
 			expect(opusVariants.some(variant => variant.selector === "demo/anthropic/claude-opus-latest")).toBe(true);

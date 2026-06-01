@@ -21,7 +21,12 @@ import {
 	logger,
 	readSseEvents,
 } from "@oh-my-pi/pi-utils";
-import { hasOpus47ApiRestrictions, mapEffortToAnthropicAdaptiveEffort } from "../model-thinking";
+import {
+	disablesParallelToolUse,
+	hasOpus47ApiRestrictions,
+	mapEffortToAnthropicAdaptiveEffort,
+	supportsMidConversationSystemMessages,
+} from "../model-thinking";
 import { calculateCost } from "../models";
 import { getEnvApiKey, OUTPUT_FALLBACK_BUFFER } from "../stream";
 import type {
@@ -60,7 +65,7 @@ import { AssistantMessageEventStream } from "../utils/event-stream";
 import { isFoundryEnabled } from "../utils/foundry";
 import { finalizeErrorMessage, type RawHttpRequestDump, rewriteCopilotError } from "../utils/http-inspector";
 import { getStreamFirstEventTimeoutMs, getStreamIdleTimeoutMs, iterateWithIdleTimeout } from "../utils/idle-iterator";
-import { parseJsonWithRepair, parseStreamingJson } from "../utils/json-parse";
+import { parseJsonWithRepair, parseStreamingJson, parseStreamingJsonThrottled } from "../utils/json-parse";
 import { parseGitHubCopilotApiKey } from "../utils/oauth/github-copilot";
 import { notifyProviderResponse } from "../utils/provider-response";
 import { isCopilotTransientModelError } from "../utils/retry";
@@ -650,17 +655,6 @@ function convertContentBlocks(
 	return blocks;
 }
 
-/**
- * Marker phrase that Claude has been observed to hallucinate inside reasoning summaries
- * (e.g. "I don't see any current rewritten thinking or next thinking to process. Could
- * you provide..."). When this substring appears in a streamed thinking block we collapse
- * the entire block to {@link BROKEN_THINKING_REPLACEMENT} and drop the signature so
- * downstream UI/transcripts don't surface the meta-prompt and replay can't re-anchor on
- * the garbled chain.
- */
-const BROKEN_THINKING_MARKER = "rewritten thinking";
-const BROKEN_THINKING_REPLACEMENT = "Thinking...";
-
 export type AnthropicEffort = "low" | "medium" | "high" | "xhigh" | "max";
 export type AnthropicThinkingDisplay = "summarized" | "omitted";
 
@@ -983,6 +977,12 @@ function getAnthropicCompat(
 		disableAdaptiveThinking: model.compat?.disableAdaptiveThinking ?? false,
 		supportsEagerToolInputStreaming: model.compat?.supportsEagerToolInputStreaming ?? true,
 		supportsLongCacheRetention: model.compat?.supportsLongCacheRetention ?? true,
+		supportsMidConversationSystem:
+			model.compat?.supportsMidConversationSystem ??
+			// First-party Claude API only. Bedrock/Vertex/Foundry and other
+			// Anthropic-compatible proxies reject the role; gate auto-detection on
+			// the canonical api.anthropic.com host plus an Opus 4.8+ model id.
+			(isAnthropicApiBaseUrl(model.baseUrl) && supportsMidConversationSystemMessages(model.id)),
 	};
 }
 
@@ -1204,19 +1204,13 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 				| ThinkingContent
 				| RedactedThinkingContent
 				| TextContent
-				| (ToolCall & { partialJson: string })
+				| (ToolCall & { partialJson: string; lastParseLen?: number })
 			) & { index: number };
 			const idleTimeoutMs = options?.streamIdleTimeoutMs ?? getStreamIdleTimeoutMs();
 			const firstEventTimeoutMs = options?.streamFirstEventTimeoutMs ?? getStreamFirstEventTimeoutMs(idleTimeoutMs);
 			const requestTimeoutMs =
 				firstEventTimeoutMs !== undefined && firstEventTimeoutMs > 0 ? firstEventTimeoutMs : undefined;
 			const blocks = output.content as Block[];
-			// Recent Claude releases occasionally hallucinate meta-prompts asking the operator
-			// to supply "rewritten thinking" / "next thinking" as reasoning content. The summary
-			// is useless and confuses the UI, so we collapse any thinking block whose stream
-			// contains the marker phrase down to a plain "Thinking..." placeholder and drop the
-			// (now invalid) signature so subsequent turns don't replay the garbled chain.
-			const suppressedThinkingBlocks = new WeakSet<Block>();
 			stream.push({ type: "start", partial: output });
 			// Retry loop for transient errors from the stream.
 			// Provider-level transport/rate-limit failures: only before any streamed content starts.
@@ -1371,14 +1365,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 								const index = blocks.findIndex(b => b.index === event.index);
 								const block = blocks[index];
 								if (block && block.type === "thinking") {
-									if (suppressedThinkingBlocks.has(block)) continue;
 									block.thinking += event.delta.thinking;
-									if (block.thinking.includes(BROKEN_THINKING_MARKER)) {
-										suppressedThinkingBlocks.add(block);
-										block.thinking = BROKEN_THINKING_REPLACEMENT;
-										block.thinkingSignature = "";
-										continue;
-									}
 									stream.push({
 										type: "thinking_delta",
 										contentIndex: index,
@@ -1391,7 +1378,11 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 								const block = blocks[index];
 								if (block && block.type === "toolCall") {
 									block.partialJson += event.delta.partial_json;
-									block.arguments = parseStreamingJson(block.partialJson);
+									const throttled = parseStreamingJsonThrottled(block.partialJson, block.lastParseLen ?? 0);
+									if (throttled) {
+										block.arguments = throttled.value;
+										block.lastParseLen = throttled.parsedLen;
+									}
 									stream.push({
 										type: "toolcall_delta",
 										contentIndex: index,
@@ -1402,7 +1393,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 							} else if (event.delta.type === "signature_delta") {
 								const index = blocks.findIndex(b => b.index === event.index);
 								const block = blocks[index];
-								if (block && block.type === "thinking" && !suppressedThinkingBlocks.has(block)) {
+								if (block && block.type === "thinking") {
 									block.thinkingSignature = block.thinkingSignature || "";
 									block.thinkingSignature += event.delta.signature;
 								}
@@ -1420,14 +1411,6 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 										partial: output,
 									});
 								} else if (block.type === "thinking") {
-									if (
-										!suppressedThinkingBlocks.has(block) &&
-										block.thinking.includes(BROKEN_THINKING_MARKER)
-									) {
-										suppressedThinkingBlocks.add(block);
-										block.thinking = BROKEN_THINKING_REPLACEMENT;
-										block.thinkingSignature = "";
-									}
 									stream.push({
 										type: "thinking_end",
 										contentIndex: index,
@@ -1437,6 +1420,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 								} else if (block.type === "toolCall") {
 									block.arguments = parseStreamingJson(block.partialJson);
 									delete (block as { partialJson?: string }).partialJson;
+									delete (block as { lastParseLen?: number }).lastParseLen;
 									stream.push({
 										type: "toolcall_end",
 										contentIndex: index,
@@ -1557,9 +1541,15 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 					}
 					const isTransientEnvelopeFailure =
 						isTransientStreamParseError(streamFailure) || isTransientStreamEnvelopeError(streamFailure);
+					const isLocalIdleTimeout =
+						streamFailure === idleTimeoutAbortError ||
+						(streamFailure instanceof Error && streamFailure.message === idleTimeoutAbortError.message);
 					const canRetryTransientEnvelopeFailure = isTransientEnvelopeFailure && !streamedReplayUnsafeContent;
 					const canRetryProviderFailure =
-						firstTokenTime === undefined && isProviderRetryableError(streamFailure, model.provider);
+						!isLocalIdleTimeout &&
+						firstTokenTime === undefined &&
+						!streamedReplayUnsafeContent &&
+						isProviderRetryableError(streamFailure, model.provider);
 					if (
 						activeAbortTracker.wasCallerAbort() ||
 						providerRetryAttempt >= PROVIDER_MAX_RETRIES ||
@@ -1595,6 +1585,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages"> = (
 			for (const block of output.content) {
 				delete (block as { index?: number }).index;
 				delete (block as { partialJson?: string }).partialJson;
+				delete (block as { lastParseLen?: number }).lastParseLen;
 			}
 			const firstEventTimeoutError = activeAbortTracker.getLocalAbortReason();
 			output.stopReason = activeAbortTracker.wasCallerAbort() ? "aborted" : "error";
@@ -1796,7 +1787,7 @@ function disableThinkingIfToolChoiceForced(params: MessageCreateParamsStreaming)
 
 function ensureMaxTokensForThinking(params: MessageCreateParamsStreaming, model: Model<"anthropic-messages">): void {
 	const thinking = params.thinking;
-	if (!thinking || thinking.type !== "enabled") return;
+	if (thinking?.type !== "enabled") return;
 
 	const budgetTokens = thinking.budget_tokens ?? 0;
 	if (budgetTokens <= 0) return;
@@ -2050,7 +2041,9 @@ function buildParams(
 	const { cacheControl } = getCacheControl(model, baseUrl, options?.cacheRetention);
 	const params: AnthropicSamplingParams = {
 		model: model.id,
-		messages: convertAnthropicMessages(context.messages, model, isOAuthToken),
+		// `system`-role params (Opus 4.8 mid-conversation system messages) are not
+		// yet in the SDK's `MessageParam` union; cast until it widens.
+		messages: convertAnthropicMessages(context.messages, model, isOAuthToken) as MessageParam[],
 		max_tokens: options?.maxTokens || (model.maxTokens / 3) | 0,
 		stream: true,
 	};
@@ -2153,6 +2146,21 @@ function buildParams(
 		}
 	}
 
+	// Claude Opus 4.8 must emit at most one tool call per turn. Force
+	// `disable_parallel_tool_use` onto the outgoing tool_choice (synthesizing an
+	// `auto` choice when none is set). Gated on tools being present: Anthropic
+	// rejects `tool_choice` without `tools`, and parallelism is moot otherwise.
+	// `none` rejects the field, so leave it untouched. A fresh object is built
+	// rather than mutated so the caller's `options.toolChoice` is never aliased.
+	if (disablesParallelToolUse(model.id) && params.tools && params.tools.length > 0) {
+		const current = params.tool_choice;
+		if (!current) {
+			params.tool_choice = { type: "auto", disable_parallel_tool_use: true };
+		} else if (current.type !== "none") {
+			params.tool_choice = { ...current, disable_parallel_tool_use: true };
+		}
+	}
+
 	const shouldInjectClaudeCodeInstruction = isOAuthToken && !model.id.startsWith("claude-3-5-haiku");
 	const billingSystemPrompts = normalizeSystemPrompts(context.systemPrompt);
 	const billingPayload = shouldInjectClaudeCodeInstruction
@@ -2229,12 +2237,24 @@ function buildToolResultBlock(model: Model<"anthropic-messages">, msg: ToolResul
 	return block;
 }
 
+/**
+ * Anthropic message param extended with the mid-conversation `system` role
+ * (Opus 4.8+). The SDK's `MessageParam` predates the feature and only allows
+ * `user`/`assistant`, so the system variant is modeled locally and cast back
+ * to `MessageParam[]` at the call site.
+ */
+export type AnthropicMessageParam = MessageParam | { role: "system"; content: MessageParam["content"] };
+
 export function convertAnthropicMessages(
 	messages: Message[],
 	model: Model<"anthropic-messages">,
 	isOAuthToken: boolean,
-): MessageParam[] {
-	const params: MessageParam[] = [];
+): AnthropicMessageParam[] {
+	const params: AnthropicMessageParam[] = [];
+	// Indices of params emitted from `developer` messages. After the main pass,
+	// the ones whose placement satisfies Anthropic's mid-conversation rules are
+	// upgraded from the `user` role to the authoritative `system` role.
+	const developerParamIndices: number[] = [];
 
 	const transformedMessages = transformMessages(messages, model, normalizeToolCallId);
 
@@ -2244,29 +2264,22 @@ export function convertAnthropicMessages(
 		if (msg.role === "user" || msg.role === "developer") {
 			if (!msg.content) continue;
 
+			let content: string | ContentBlockParam[];
 			if (typeof msg.content === "string") {
-				if (msg.content.trim().length > 0) {
-					params.push({
-						role: "user",
-						content: msg.content.toWellFormed(),
-					});
-				}
+				if (msg.content.trim().length === 0) continue;
+				content = msg.content.toWellFormed();
 			} else {
 				const contentBlocks = convertContentBlocks(msg.content, model.input.includes("image"));
 				if (typeof contentBlocks === "string") {
 					if (contentBlocks.trim().length === 0) continue;
-					params.push({
-						role: "user",
-						content: contentBlocks,
-					});
-					continue;
+					content = contentBlocks;
+				} else {
+					if (contentBlocks.length === 0) continue;
+					content = contentBlocks;
 				}
-				if (contentBlocks.length === 0) continue;
-				params.push({
-					role: "user",
-					content: contentBlocks,
-				});
 			}
+			if (msg.role === "developer") developerParamIndices.push(params.length);
+			params.push({ role: "user", content });
 		} else if (msg.role === "assistant") {
 			const blocks: ContentBlockParam[] = [];
 			const hasSignedThinking = msg.content.some(
@@ -2365,6 +2378,23 @@ export function convertAnthropicMessages(
 		}
 	}
 
+	// Upgrade developer-origin params to mid-conversation `system` messages where
+	// Anthropic's placement rules allow it (Opus 4.8+ on the first-party API).
+	// Rules: a system message must immediately follow a `user` turn and must be
+	// the last entry or be followed by an `assistant` turn — never first, and
+	// never consecutive. Requiring the next param to be `assistant` (or absent)
+	// covers both the "followed by assistant / last" and "no consecutive system"
+	// constraints. Anything that does not qualify stays a `user` message.
+	if (developerParamIndices.length > 0 && getAnthropicCompat(model).supportsMidConversationSystem) {
+		for (const idx of developerParamIndices) {
+			const followsUser = idx > 0 && params[idx - 1]?.role === "user";
+			const next = params[idx + 1];
+			const lastOrBeforeAssistant = idx === params.length - 1 || next?.role === "assistant";
+			if (followsUser && lastOrBeforeAssistant) {
+				params[idx] = { role: "system", content: params[idx].content };
+			}
+		}
+	}
 	if (params.length > 0 && params[params.length - 1]?.role === "assistant") {
 		params.push({ role: "user", content: "Continue." });
 	}
