@@ -115,6 +115,8 @@ jobs:
                 "pi-natives-darwin-x64-baseline-h${hash}"
                 "pi-natives-darwin-arm64-h${hash}"
                 "pi-natives-win32-x64-baseline-h${hash}"
+                "pi-natives-linux-x64-musl-h${hash}"
+                "pi-natives-linux-arm64-musl-h${hash}"
               )
               linux_run_id=""
               release_run_id=""
@@ -217,6 +219,8 @@ jobs:
                - { os: macos-15-intel, platform: darwin, arch: x64, variant: baseline }
                - { os: macos-14, platform: darwin, arch: arm64 }
                - { os: ubuntu-22.04, platform: win32, arch: x64, target: x86_64-pc-windows-msvc, variant: baseline }
+               - { os: ubuntu-22.04, platform: linux, arch: x64, target: x86_64-unknown-linux-musl }
+               - { os: ubuntu-22.04, platform: linux, arch: arm64, target: aarch64-unknown-linux-musl }
       runs-on: ${{ matrix.os }}
       steps:
          - uses: actions/checkout@v4
@@ -344,6 +348,20 @@ jobs:
                     arch: arm64,
                     target_id: linux-arm64,
                     binary_path: packages/coding-agent/binaries/omp-linux-arm64,
+                 }
+               - {
+                    os: ubuntu-22.04,
+                    platform: linux,
+                    arch: x64,
+                    target_id: linux-x64-musl,
+                    binary_path: packages/coding-agent/binaries/omp-linux-x64-musl,
+                 }
+               - {
+                    os: ubuntu-22.04,
+                    platform: linux,
+                    arch: arm64,
+                    target_id: linux-arm64-musl,
+                    binary_path: packages/coding-agent/binaries/omp-linux-arm64-musl,
                  }
                - {
                     os: macos-15-intel,
