@@ -53,11 +53,25 @@ const targets: BinaryTarget[] = [
 		outfile: "packages/coding-agent/binaries/omp-linux-x64",
 	},
 	{
+		id: "linux-x64-musl",
+		platform: "linux",
+		arch: "x64",
+		target: "bun-linux-x64-musl",
+		outfile: "packages/coding-agent/binaries/omp-linux-x64-musl",
+	},
+	{
 		id: "linux-arm64",
 		platform: "linux",
 		arch: "arm64",
 		target: "bun-linux-arm64",
 		outfile: "packages/coding-agent/binaries/omp-linux-arm64",
+	},
+	{
+		id: "linux-arm64-musl",
+		platform: "linux",
+		arch: "arm64",
+		target: "bun-linux-arm64-musl",
+		outfile: "packages/coding-agent/binaries/omp-linux-arm64-musl",
 	},
 	{
 		id: "win32-x64",
