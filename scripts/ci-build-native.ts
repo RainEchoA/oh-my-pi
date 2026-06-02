@@ -49,7 +49,19 @@ async function runNativeBuild(env: Record<string, string | undefined>, label: st
 async function main(): Promise<void> {
 	const variants = parseTargetVariants();
 	if (variants.length === 0) {
-		await runNativeBuild(Bun.env, "default");
+		// Default to modern variant for x64 builds when TARGET_VARIANTS is not specified
+		const defaultVariant: NativeBuildVariant = {
+			name: "modern",
+			rustflags: "-C target-cpu=x86-64-v3",
+		};
+		await runNativeBuild(
+			{
+				...Bun.env,
+				RUSTFLAGS: defaultVariant.rustflags,
+				TARGET_VARIANT: defaultVariant.name,
+			},
+			"default",
+		);
 		return;
 	}
 
