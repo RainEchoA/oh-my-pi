@@ -208,7 +208,7 @@ jobs:
    # rust-hash canary already found a recent run with all artifacts intact.
    native_release:
       needs: [gate, rust-hash]
-      if: ${{ needs.gate.outputs.is-release == 'true' || (github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.rust-hash.outputs.release-run-id == '') }}
+      if: ${{ needs.gate.outputs.is-release == 'true' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.rust-hash.outputs.release-run-id == '') }}
       strategy:
          fail-fast: false
          matrix:
